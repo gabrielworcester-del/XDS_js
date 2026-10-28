@@ -42,7 +42,7 @@ var Quaternion = require('quaternion');
 // =======================================================================================
 // Constants
 // =======================================================================================
-const SENSOR_NAME                          = "Xsens DOT",
+const SENSOR_NAME                          = "Movella DOT",
       SENSOR_ENABLE                        = 0x01,
       SENSOR_DISABLE                       = 0x00,
       BLE_UUID_CONTROL                     = "15172001494711e98646d663bd873d93",
@@ -72,7 +72,7 @@ class BleHandler
         this.syncingEvents = syncingEventsInterface;
         this.guiInterface = guiInterface;
         this.discoveredSensorCounter = 0;
-        this.central = require('noble-mac');
+        this.central = require('@abandonware/noble');
         this.setBleEventHandlers(this);
 
         this.isSyncingEnabled = true;
