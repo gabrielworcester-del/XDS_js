@@ -1,34 +1,33 @@
 //  Copyright (c) 2003-2020 Xsens Technologies B.V. or subsidiaries worldwide.
 //  All rights reserved.
-//  
+//
 //  Redistribution and use in source and binary forms, with or without modification,
 //  are permitted provided that the following conditions are met:
-//  
+//
 //  1.      Redistributions of source code must retain the above copyright notice,
 //           this list of conditions, and the following disclaimer.
-//  
+//
 //  2.      Redistributions in binary form must reproduce the above copyright notice,
 //           this list of conditions, and the following disclaimer in the documentation
 //           and/or other materials provided with the distribution.
-//  
+//
 //  3.      Neither the names of the copyright holders nor the names of their contributors
 //           may be used to endorse or promote products derived from this software without
 //           specific prior written permission.
-//  
+//
 //  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
 //  EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
 //  MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
 //  THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-//  SPECIAL, EXEMPLARY OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT 
+//  SPECIAL, EXEMPLARY OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT
 //  OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
 //  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY OR
 //  TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-//  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.THE LAWS OF THE NETHERLANDS 
-//  SHALL BE EXCLUSIVELY APPLICABLE AND ANY DISPUTES SHALL BE FINALLY SETTLED UNDER THE RULES 
-//  OF ARBITRATION OF THE INTERNATIONAL CHAMBER OF COMMERCE IN THE HAGUE BY ONE OR MORE 
+//  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.THE LAWS OF THE NETHERLANDS
+//  SHALL BE EXCLUSIVELY APPLICABLE AND ANY DISPUTES SHALL BE FINALLY SETTLED UNDER THE RULES
+//  OF ARBITRATION OF THE INTERNATIONAL CHAMBER OF COMMERCE IN THE HAGUE BY ONE OR MORE
 //  ARBITRATORS APPOINTED IN ACCORDANCE WITH SAID RULES.
-//  
-
+//
 // =======================================================================================
 // Class definition
 // =======================================================================================
@@ -78,7 +77,6 @@ class SyncManager
                     component.bleHandler.readRecordingAck( parameters.sensor );
                 }, 1500);
                 break;
-
             case 'bleSensorSyncingDone':
                 console.log( parameters.sensor.address + " isSuccess " + parameters.isSuccess );
 
@@ -87,7 +85,6 @@ class SyncManager
                 console.log( parameters.sensor.address + " syncing done list: " + component.syncingDoneList );
 
                 // component.gui.sendGuiEvent( 'syncingDone', {sensor: parameters.sensor, isSuccess: parameters.isSuccess} );
-
                 component.onSyncingDone();
                 break;
         }
@@ -138,6 +135,16 @@ class SyncManager
 
         console.log( "startSyncing root " + rootAddress + ", devices " + globalSyncingSensors );
 
+        // LSL uses the same root and sensor roster as the Xsens sync procedure.
+        this.rootAddress = rootAddress;
+        this.lslSyncNotified = false;
+        if (this.bleHandler.lslPublisher)
+        {
+            try { this.bleHandler.lslPublisher.beginSync(); }
+            catch(error) { console.error('[LSL] beginSync failed:', error); }
+        }
+
+
         globalSyncingSensors.forEach( function (sensor)
         {
             component.bleHandler.startSyncing(sensor, rootAddress);
@@ -161,10 +168,10 @@ class SyncManager
         console.log( "onSyncingDone " + globalConnectedSensors.length + ", " + globalSyncingSensors.length + ", " + this.syncingDoneList.length );
 
         if ( globalConnectedSensors.length == globalSyncingSensors.length
-            && this.syncingDoneList.length == globalSyncingSensors.length ) 
+            && this.syncingDoneList.length == globalSyncingSensors.length )
         {
             isInSyncingProgress = false;
-            
+
             var successCount = 0;
             this.syncingDoneList.forEach( function(item)
             {
@@ -178,19 +185,59 @@ class SyncManager
 
             this.gui.sendGuiEvent( 'syncingDone', {isAllSuccess: isAllSuccess} );
 
+            // Publish only if every expected sensor acknowledged success.
+            // Duplicates, missing MACs and >5 sensors are rejected by the manager.
+            this.reportLslSync(isAllSuccess);
+
+
             if ( this.syncingTimeoutId != undefined )
             {
                 clearTimeout( this.syncingTimeoutId );
             }
-        } 
-        else if ( !isInSyncingProgress ) 
+        }
+        else if ( !isInSyncingProgress )
         {
             this.gui.sendGuiEvent( 'syncingDone', {isAllSuccess: false} );
+            this.reportLslSync(false);
+        }
+    }
+
+    // Called once per sync attempt, on complete success or timeout/failure.
+    reportLslSync(isAllSuccess)
+    {
+        if (this.lslSyncNotified) return;
+        this.lslSyncNotified = true;
+        const publisher = this.bleHandler.lslPublisher;
+        if (!publisher) return;
+
+        const received = this.syncingDoneList;
+        const expected = globalSyncingSensors.map(sensor => sensor.address);
+        const acknowledged = received.map(item => item.sensor.address);
+        const valid = Boolean(isAllSuccess) && expected.length > 0 &&
+            expected.length <= 5 &&
+            new Set(expected).size === expected.length &&
+            received.length === expected.length &&
+            received.every(item => item.isSuccess === true) &&
+            new Set(acknowledged).size === acknowledged.length &&
+            expected.every(address => acknowledged.includes(address)) &&
+            expected.includes(this.rootAddress);
+
+        try
+        {
+            publisher.completeSync({
+                isAllSuccess: valid,
+                rootAddress: this.rootAddress,
+                addresses: valid ? expected : []
+            });
+        }
+        catch(error)
+        {
+            console.error('[LSL] completeSync failed:', error);
+            try { publisher.disable(error); } catch(ignored) {}
         }
     }
 
 }
-
 // =======================================================================================
 // Export the SyncManager class
 // =======================================================================================

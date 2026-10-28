@@ -39,6 +39,7 @@
 // =======================================================================================
 var Quaternion = require('quaternion');
 
+
 // =======================================================================================
 // Constants
 // =======================================================================================
@@ -73,6 +74,19 @@ class BleHandler
         this.guiInterface = guiInterface;
         this.discoveredSensorCounter = 0;
         this.central = require('@abandonware/noble');
+        // Optional direct LSL publisher. A native-library error must not
+        // prevent the original Xsens BLE/GUI/CSV server from starting.
+        this.lslPublisher = null;
+        try
+        {
+            const LslPublisher = require('./lslPublisher');
+            this.lslPublisher = new LslPublisher(5);
+            console.log('[LSL] Publisher available; awaiting DOT synchronization');
+        }
+        catch(error)
+        {
+            console.error('[LSL] Initialization failed (BLE server still works):', error);
+        }
         this.setBleEventHandlers(this);
 
         this.isSyncingEnabled = true;
@@ -221,6 +235,22 @@ class BleHandler
     sendBleEvent( eventName, parameters )
     {
         var bleHandler = this;
+
+        if (this.lslPublisher && parameters && parameters.sensor)
+        {
+            const address = parameters.sensor.address;
+            try
+            {
+                if (eventName === 'bleSensorDisconnected')
+                    this.lslPublisher.onDisconnect(address);
+                else if (eventName === 'bleSensorDisabled')
+                    this.lslPublisher.onMeasurementStopped(address);
+            }
+            catch(error)
+            {
+                console.error('[LSL] Outlet cleanup error:', error);
+            }
+        }
         if( eventName == 'bleSensorError' )
         {
             setTimeout( function()
@@ -264,11 +294,30 @@ class BleHandler
         {
             measurementCharacteristic.on('data', function(data)
             {
-                bleHandler.sendBleEvent
-                ( 
-                    "bleSensorData", 
-                    convertSensorData( sensor, data, measuringPayloadId, bleHandler.isSyncingEnabled )
+                // Decode exactly once: retain the Xsens time and sensor address.
+                const decoded = convertSensorData(
+                    sensor, data, measuringPayloadId, bleHandler.isSyncingEnabled
                 );
+
+                // Only publish hardware-synchronized Complete Euler measurements.
+                // No UDP socket, disk read, or independent sensor timestamps.
+                if (bleHandler.lslPublisher && bleHandler.isSyncingEnabled &&
+                    measuringPayloadId === MEASURING_PAYLOAD_TYPE_COMPLETE_EULER)
+                {
+                    try
+                    {
+                        bleHandler.lslPublisher.onMeasurement(decoded);
+                    }
+                    catch(error)
+                    {
+                        // Protect the original server from a native LSL failure.
+                        try { bleHandler.lslPublisher.disable(error); }
+                        catch(disableError) { console.error('[LSL]', disableError); }
+                    }
+                }
+
+                // Original server pathway remains intact (GUI and CSV recording).
+                bleHandler.sendBleEvent('bleSensorData', decoded);
             });
         }
 
