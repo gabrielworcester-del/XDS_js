@@ -95,9 +95,11 @@ class LslPublisher {
         return true;
     }
 
-    createSensorOutlet(address) {
+    createSensorOutlet(address, unsynced = false) {
         if (this.outlets.has(address)) return this.outlets.get(address);
-        if (!this.syncReady || !this.syncedAddresses.has(address)) return null;
+        if (!unsynced && (!this.syncReady || !this.syncedAddresses.has(address))) return null;
+        // Only one unsynchronized sensor; do not imply multi-sensor clock alignment.
+        if (unsynced && this.outlets.size > 0) return null;
         if (this.outlets.size >= this.maxSensors) return null;
 
         const safeAddress = address.replace(/[^a-zA-Z0-9]/g, '_');
@@ -115,11 +117,14 @@ class LslPublisher {
             const desc = getDesc(info);
             appendValue(desc, 'manufacturer', 'Movella / Xsens');
             appendValue(desc, 'sensor_address', address);
-            appendValue(desc, 'root_address', this.rootAddress);
+            appendValue(desc, 'root_address', unsynced ? 'none' : this.rootAddress);
             appendValue(desc, 'payload', 'Complete Euler (ID 16)');
-            appendValue(desc, 'timebase', 'root-synchronized SampleTimeFine (microseconds)');
-            appendValue(desc, 'lsl_time_note',
-                'Shared sensor-time mapping anchored at first packet arrival; absolute offset includes initial BLE delay');
+            appendValue(desc, 'timebase', unsynced
+                ? 'host-derived CSV timestamp; LSL clock at BLE packet arrival'
+                : 'root-synchronized SampleTimeFine (microseconds)');
+            appendValue(desc, 'lsl_time_note', unsynced
+                ? 'Unsynchronized single DOT; arrival timestamp includes BLE delay and jitter'
+                : 'Shared sensor-time mapping anchored at first packet arrival; absolute offset includes initial BLE delay');
             const channels = appendChild(desc, 'channels');
             for (const [label, unit] of CHANNELS) {
                 const channel = appendChild(channels, 'channel');
@@ -161,19 +166,23 @@ class LslPublisher {
         return this.anchorLsl + (state.unwrapped - this.anchorUs) / 1e6;
     }
 
-    onMeasurement(p) {
-        if (!this.syncReady || this.failed || !p ||
-            !this.syncedAddresses.has(p.address)) return;
-        // Only decoded Complete Euler data; ignore other payload modes.
-        if (!Number.isInteger(p.timestamp) ||
-            p.timestamp < 0 || p.timestamp > 0xFFFFFFFF) return;
+    onMeasurement(p, unsynced = false) {
+        if (this.failed || !p || !p.address) return;
+        if (!unsynced && (!this.syncReady || !this.syncedAddresses.has(p.address))) return;
+
+        // Synchronized sensor time is uint32 microseconds; when sync is off,
+        // the existing CSV pathway uses a derived host time instead.
+        if (!Number.isFinite(p.timestamp)) return;
+        if (!unsynced && (!Number.isInteger(p.timestamp) ||
+            p.timestamp < 0 || p.timestamp > 0xFFFFFFFF)) return;
+
         const values = [p.timestamp, p.euler_x, p.euler_y, p.euler_z,
                         p.freeAcc_x, p.freeAcc_y, p.freeAcc_z];
         if (!values.every(Number.isFinite)) return;
 
-        const outlet = this.createSensorOutlet(p.address);
+        const outlet = this.createSensorOutlet(p.address, unsynced);
         if (!outlet) return;
-        const lslTime = this.toLslTime(p.address, p.timestamp);
+        const lslTime = unsynced ? localClock() : this.toLslTime(p.address, p.timestamp);
         if (lslTime === null) return;
         const rc = pushSample(outlet, Float64Array.from(values), lslTime, 1);
         if (rc !== 0) throw new Error('lsl_push_sample_dtp returned ' + rc);

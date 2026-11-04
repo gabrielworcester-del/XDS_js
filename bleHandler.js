@@ -299,14 +299,16 @@ class BleHandler
                     sensor, data, measuringPayloadId, bleHandler.isSyncingEnabled
                 );
 
-                // Only publish hardware-synchronized Complete Euler measurements.
-                // No UDP socket, disk read, or independent sensor timestamps.
-                if (bleHandler.lslPublisher && bleHandler.isSyncingEnabled &&
+                // Publish Complete Euler in either mode: synchronized sensor clock,
+                // or unsynchronized single-DOT with BLE arrival time.
+                if (bleHandler.lslPublisher &&
                     measuringPayloadId === MEASURING_PAYLOAD_TYPE_COMPLETE_EULER)
                 {
                     try
                     {
-                        bleHandler.lslPublisher.onMeasurement(decoded);
+                        bleHandler.lslPublisher.onMeasurement(
+                            decoded, !bleHandler.isSyncingEnabled
+                        );
                     }
                     catch(error)
                     {
