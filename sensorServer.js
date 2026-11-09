@@ -182,6 +182,18 @@ var transitions =
     },
 
     // -- Connecting --
+    // A delayed GUI cancel/stop can arrive after a connection state has
+    // already returned to Idle. Treat it as a stale no-op, not an error.
+    {
+        stateName: 'Idle',
+        eventName: 'stopConnectingSensors',
+        nextState: 'Idle',
+        transFunc: function(component, parameters)
+        {
+            console.log('[STATE] Ignored late stopConnectingSensors for',
+                parameters && parameters.addresses && parameters.addresses[0]);
+        }
+    },
 
     {
 		stateName: 'Connect next?',

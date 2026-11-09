@@ -164,10 +164,16 @@ class BleHandler
     connectSensor( sensor )
     {
         var bleHandler = this;
+        console.log('[BLE] CONNECT request', sensor.address,
+            'peripheralState=', sensor.state,
+            'activeConnections=', globalConnectedSensors.map(s => s.address).join(','));
 
         sensor.removeAllListeners();
         sensor.connect( function(error)
         {
+            console.log('[BLE] CONNECT result', sensor.address,
+                'error=', error ? String(error) : 'none',
+                'peripheralState=', sensor.state);
             if( error )
             {
                 bleHandler.sendBleEvent( 'bleSensorError', { sensor:sensor, error:error } );
