@@ -74,6 +74,8 @@ class BleHandler
         this.guiInterface = guiInterface;
         this.discoveredSensorCounter = 0;
         this.central = require('@abandonware/noble');
+        this._bleScanActive = false;
+        this._pendingConnections = new Set();
         // Optional direct LSL publisher. A native-library error must not
         // prevent the original Xsens BLE/GUI/CSV server from starting.
         this.lslPublisher = null;
@@ -112,11 +114,15 @@ class BleHandler
 
         central.on( 'scanStart', function()
         {
+            bleHandler._bleScanActive = true;
+            console.log('[BLE-V2] Scan started');
             bleHandler.sendBleEvent( 'bleScanningStarted' );
         });
 
         central.on( 'scanStop', function()
         {
+            bleHandler._bleScanActive = false;
+            console.log('[BLE-V2] Scan stopped');
             bleHandler.sendBleEvent( 'bleScanningStopped' );
         });
 
@@ -168,12 +174,56 @@ class BleHandler
             'peripheralState=', sensor.state,
             'activeConnections=', globalConnectedSensors.map(s => s.address).join(','));
 
-        sensor.removeAllListeners();
-        sensor.connect( function(error)
-        {
-            console.log('[BLE] CONNECT result', sensor.address,
-                'error=', error ? String(error) : 'none',
+        // Only one outstanding connect attempt per peripheral.
+        if (this._pendingConnections.has(sensor.address)) {
+            console.warn('[BLE-V2] Duplicate CONNECT ignored:', sensor.address,
                 'peripheralState=', sensor.state);
+            return;
+        }
+        if (sensor.state === 'connecting' || sensor.state === 'disconnecting') {
+            console.warn('[BLE-V2] CONNECT deferred: peripheral is', sensor.state,
+                sensor.address, '(restart server after a hung attempt)');
+            return;
+        }
+        if (sensor.state === 'connected') {
+            console.log('[BLE-V2] Already connected:', sensor.address);
+            return;
+        }
+        this._pendingConnections.add(sensor.address);
+        const scanWasActive = this._bleScanActive;
+        console.log('[BLE-V2] Preparing connection', sensor.address,
+            'scanActive=', scanWasActive);
+        // Some HCI controllers cannot establish a connection while actively scanning.
+        // Keep the pause small; avoid changing the existing GUI connection workflow.
+        if (scanWasActive) {
+            console.log('[BLE-V2] Stopping scan before connection');
+            this.central.stopScanning();
+        }
+        const attemptStarted = Date.now();
+        let completed = false;
+        const warningTimer = setTimeout(() => {
+            if (!completed) {
+                console.error('[BLE-V2] Timeout waiting for Noble connection callback',
+                    sensor.address, 'elapsedMs=', Date.now() - attemptStarted,
+                    'peripheralState=', sensor.state,
+                    'scanActive=', bleHandler._bleScanActive);
+                console.error('[BLE-V2] Run sudo btmon during next attempt to inspect HCI events');
+                // Do not forcibly disconnect or cancel: we are collecting diagnostics.
+            }
+        }, 12000);
+        setTimeout(() => {
+            // removeAllListeners is retained from original server for now.
+            sensor.removeAllListeners();
+            try {
+                sensor.connect(function(error)
+                {
+                    completed = true;
+                    clearTimeout(warningTimer);
+                    bleHandler._pendingConnections.delete(sensor.address);
+                    console.log('[BLE] CONNECT result', sensor.address,
+                        'error=', error ? String(error) : 'none',
+                        'peripheralState=', sensor.state,
+                        'elapsedMs=', Date.now() - attemptStarted);
             if( error )
             {
                 bleHandler.sendBleEvent( 'bleSensorError', { sensor:sensor, error:error } );
@@ -232,7 +282,15 @@ class BleHandler
                     bleHandler.readHeadingStatus( sensor );
                 }, 100);
             });
-        });
+                });
+            } catch (error) {
+                completed = true;
+                clearTimeout(warningTimer);
+                bleHandler._pendingConnections.delete(sensor.address);
+                console.error('[BLE-V2] connect threw:', error);
+                bleHandler.sendBleEvent('bleSensorError', {sensor: sensor, error: error});
+            }
+        }, scanWasActive ? 500 : 150);
     }
 
     // -----------------------------------------------------------------------------------
