@@ -375,6 +375,28 @@ var transitions =
 		{
 		}
     },
+    // Allow synchronization even when a missed scan-stop callback has left
+    // the global GUI state at Scanning. This does not bypass DOT sync checks.
+    {
+        stateName: 'Scanning',
+        eventName: 'startSyncing',
+        nextState: 'Syncing',
+        transFunc:function( component, parameters )
+        {
+            const scanning = component.ble._bleScanActive === true;
+            console.log('[STATE] startSyncing accepted from Scanning; scanActive=', scanning);
+            if (scanning)
+            {
+                component.ble.stopScanning();
+                // Give Noble/BlueZ time to settle before sync control writes.
+                setTimeout(function() { component.syncManager.startSyncing(); }, 300);
+            }
+            else
+            {
+                component.syncManager.startSyncing();
+            }
+        }
+    },
     {
         stateName: 'Idle',
 		eventName: 'startSyncing',
