@@ -141,6 +141,12 @@ class FunctionalComponent
 
         if ( eventName == 'blePoweredOn' )
         {
+            // Noble may emit poweredOn more than once: only the first
+            // notification belongs in the initial state transition.
+            if (this.blePoweredOn) {
+                console.log('[BLE] Ignoring duplicate blePoweredOn');
+                return;
+            }
             this.blePoweredOn = true;
 
             console.log( "blePoweredOn: " + this.blePoweredOn );

@@ -791,7 +791,7 @@ function setSynchronizedTimestamp( sensor, data, systemtime )
     if( sensor.systemTimestamp == 0 )
     {
         sensor.systemTimestamp = systemtime;
-        sensorTimestamp = sensorTimestamp;
+        sensor.sensorTimestamp = sensorTimestamp;
         return;
     }
 
