@@ -113,6 +113,17 @@ var transitions =
 	    }
     },
 
+    // PATCH4: Acknowledging an already-stopped scan is harmless.
+    {
+        stateName: 'Idle',
+        eventName: 'bleScanningStopped',
+        nextState: 'Idle',
+        transFunc:function(component, parameters)
+        {
+            component.gui.sendGuiEvent('scanningStopped');
+        }
+    },
+
     // -- Scanning --
 
     {

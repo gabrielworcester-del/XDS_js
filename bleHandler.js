@@ -75,7 +75,11 @@ class BleHandler
         this.discoveredSensorCounter = 0;
         this.central = require('@abandonware/noble');
         this._bleScanActive = false;
-        this._pendingConnections = new Set();
+        // PATCH4_CONNECTION_QUEUE: one BLE connect + GATT discovery at a time.
+        this._connectionQueue = [];
+        this._queuedAddresses = new Set();
+        this._activeConnection = null;
+        this._connectionPaused = false;
         // Optional direct LSL publisher. A native-library error must not
         // prevent the original Xsens BLE/GUI/CSV server from starting.
         this.lslPublisher = null;
@@ -153,6 +157,10 @@ class BleHandler
     // -----------------------------------------------------------------------------------
     startScanning()
     {
+        if (this._activeConnection || this._connectionQueue.length || this._connectionPaused) {
+            console.warn('[BLE-P4] Scan request ignored during connection lifecycle');
+            return;
+        }
         this.central.startScanning( [], true );
     }
 
@@ -165,132 +173,137 @@ class BleHandler
     }
     
     // -----------------------------------------------------------------------------------
-    // -- Connect sensor --
+    // -- Connect sensor: serialized connection and GATT discovery (Patch 4) --
     // -----------------------------------------------------------------------------------
-    connectSensor( sensor )
+    connectSensor(sensor)
     {
-        var bleHandler = this;
-        console.log('[BLE] CONNECT request', sensor.address,
-            'peripheralState=', sensor.state,
-            'activeConnections=', globalConnectedSensors.map(s => s.address).join(','));
+        if (!sensor || !sensor.address) return;
+        const address = sensor.address;
+        if (sensor.state === 'connected' && globalConnectedSensors.includes(sensor)) {
+            console.log('[BLE-P4] Already ready:', address);
+            return;
+        }
+        if (this._queuedAddresses.has(address) ||
+            (this._activeConnection && this._activeConnection.address === address)) {
+            console.log('[BLE-P4] Duplicate request ignored:', address);
+            return;
+        }
+        this._queuedAddresses.add(address);
+        this._connectionQueue.push(sensor);
+        console.log('[BLE-P4] QUEUED', address, 'depth=', this._connectionQueue.length);
+        this._processConnectionQueue();
+    }
 
-        // Only one outstanding connect attempt per peripheral.
-        if (this._pendingConnections.has(sensor.address)) {
-            console.warn('[BLE-V2] Duplicate CONNECT ignored:', sensor.address,
-                'peripheralState=', sensor.state);
-            return;
-        }
-        if (sensor.state === 'connecting' || sensor.state === 'disconnecting') {
-            console.warn('[BLE-V2] CONNECT deferred: peripheral is', sensor.state,
-                sensor.address, '(restart server after a hung attempt)');
-            return;
-        }
-        if (sensor.state === 'connected') {
-            console.log('[BLE-V2] Already connected:', sensor.address);
-            return;
-        }
-        this._pendingConnections.add(sensor.address);
-        const scanWasActive = this._bleScanActive;
-        console.log('[BLE-V2] Preparing connection', sensor.address,
-            'scanActive=', scanWasActive);
-        // Some HCI controllers cannot establish a connection while actively scanning.
-        // Keep the pause small; avoid changing the existing GUI connection workflow.
-        if (scanWasActive) {
-            console.log('[BLE-V2] Stopping scan before connection');
-            this.central.stopScanning();
-        }
-        const attemptStarted = Date.now();
-        let completed = false;
-        const warningTimer = setTimeout(() => {
-            if (!completed) {
-                console.error('[BLE-V2] Timeout waiting for Noble connection callback',
-                    sensor.address, 'elapsedMs=', Date.now() - attemptStarted,
-                    'peripheralState=', sensor.state,
-                    'scanActive=', bleHandler._bleScanActive);
-                console.error('[BLE-V2] Run sudo btmon during next attempt to inspect HCI events');
-                // Do not forcibly disconnect or cancel: we are collecting diagnostics.
+    _processConnectionQueue()
+    {
+        if (this._activeConnection || this._connectionPaused) return;
+        const sensor = this._connectionQueue.shift();
+        if (!sensor) return;
+        this._queuedAddresses.delete(sensor.address);
+        this._activeConnection = sensor;
+        this._connectOneSensor(sensor);
+    }
+
+    _connectOneSensor(sensor)
+    {
+        const handler = this;
+        const address = sensor.address;
+        const started = Date.now();
+        let settled = false;
+        let timeoutId = null;
+        const cleanup = () => { if (timeoutId) clearTimeout(timeoutId); timeoutId = null; };
+        const finish = (error, uncertain = false) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            if (error) {
+                console.error('[BLE-P4] FAILED', address, String(error),
+                    'state=', sensor.state, 'elapsedMs=', Date.now() - started);
+                // An uncertain HCI state cannot safely be followed by another connect.
+                if (uncertain) {
+                    handler._connectionPaused = true;
+                    console.error('[BLE-P4] QUEUE PAUSED: inspect btmon and restart server/adapter manually');
+                }
+                handler.sendBleEvent('bleSensorError', {sensor:sensor, error:error,
+                    addresses:[address]});
+            } else {
+                console.log('[BLE-P4] SENSOR_READY', address,
+                    'elapsedMs=', Date.now() - started);
             }
-        }, 12000);
-        setTimeout(() => {
-            // removeAllListeners is retained from original server for now.
-            sensor.removeAllListeners();
+            handler._activeConnection = null;
+            // Use a new turn of the event loop so the state machine can process
+            // bleSensorConnected/bleSensorError before the next sensor starts.
+            setImmediate(() => handler._processConnectionQueue());
+        };
+        const fail = (error, uncertain = false) => finish(error instanceof Error ? error : new Error(String(error)), uncertain);
+        const connect = () => {
+            if (settled) return;
+            if (sensor.state === 'connecting' || sensor.state === 'disconnecting') {
+                return fail(new Error('Peripheral still ' + sensor.state), true);
+            }
+            if (sensor.state === 'connected') {
+                return fail(new Error('Connected peripheral missing ready registration'), true);
+            }
+            // Preserve Noble's internal peripheral listeners; replace only ours.
+            sensor.removeAllListeners('disconnect');
+            console.log('[BLE-P4] CONNECT_STARTED', address);
+            timeoutId = setTimeout(() => fail(new Error('Noble connect callback timeout'), true), 12000);
             try {
-                sensor.connect(function(error)
-                {
-                    completed = true;
-                    clearTimeout(warningTimer);
-                    bleHandler._pendingConnections.delete(sensor.address);
-                    console.log('[BLE] CONNECT result', sensor.address,
-                        'error=', error ? String(error) : 'none',
-                        'peripheralState=', sensor.state,
-                        'elapsedMs=', Date.now() - attemptStarted);
-            if( error )
-            {
-                bleHandler.sendBleEvent( 'bleSensorError', { sensor:sensor, error:error } );
-                return;
-            }
-            sensor.discoverAllServicesAndCharacteristics( function(error, services, characteristics)
-            {
-                if( error )
-                {
-                    bleHandler.disconnectSensor( sensor );
-                    bleHandler.sendBleEvent( 'bleSensorError', { sensor:sensor, error: error } );
-                    return;
-                }
-                sensor.characteristics = {};
-                characteristics.forEach( function( characteristic )
-                {
-                    sensor.characteristics[characteristic.uuid] = characteristic;
+                sensor.connect(function(error) {
+                    if (settled) { console.warn('[BLE-P4] Late connect callback ignored:', address); return; }
+                    cleanup();
+                    if (error) return fail(error, sensor.state !== 'disconnected');
+                    console.log('[BLE-P4] CONNECT_SUCCEEDED', address);
+                    console.log('[BLE-P4] GATT_DISCOVERY_STARTED', address);
+                    timeoutId = setTimeout(() => fail(new Error('GATT discovery timeout'), true), 12000);
+                    try {
+                        sensor.discoverAllServicesAndCharacteristics(function(err, services, characteristics) {
+                            if (settled) { console.warn('[BLE-P4] Late GATT callback ignored:', address); return; }
+                            cleanup();
+                            if (err || !Array.isArray(characteristics)) {
+                                return fail(err || new Error('No GATT characteristics returned'), true);
+                            }
+                            sensor.characteristics = {};
+                            characteristics.forEach(c => { sensor.characteristics[c.uuid] = c; });
+                            console.log('[BLE-P4] GATT_DISCOVERY_SUCCEEDED', address,
+                                'characteristics=', characteristics.length);
+                            sensor.on('disconnect', function() {
+                                // Update the roster before notifying other synchronous subscribers.
+                                const index = globalConnectedSensors.indexOf(sensor);
+                                if (index !== -1) globalConnectedSensors.splice(index, 1);
+                                console.log('[BLE-P4] DISCONNECTED', address);
+                                const event = {sensor:sensor, addresses:[address]};
+                                if (isInSyncingProgress)
+                                    handler.sendSyncingEvent('bleSensorDisconnected', event);
+                                else
+                                    handler.sendBleEvent('bleSensorDisconnected', event);
+                            });
+                            if (!globalConnectedSensors.includes(sensor))
+                                globalConnectedSensors.push(sensor);
+                            const event = {sensor:sensor, addresses:[address]};
+                            if (isInSyncingProgress)
+                                handler.sendSyncingEvent('bleSensorConnected', event);
+                            handler.sendBleEvent('bleSensorConnected', event);
+                            setTimeout(() => {
+                                if (sensor.state === 'connected') handler.readHeadingStatus(sensor);
+                            }, 100);
+                            finish(null);
+                        });
+                    } catch (e) { fail(e, true); }
                 });
-
-                sensor.on( 'disconnect', function()
-                {
-                    var addresses = [sensor.address];
-
-                    if ( isInSyncingProgress )
-                    {
-                        console.log( 'disconnect sensor ' + sensor.address );
-                        bleHandler.sendSyncingEvent( 'bleSensorDisconnected', { sensor:sensor, addresses:addresses } );
-                    }
-                    else
-                    {
-                        bleHandler.sendBleEvent( 'bleSensorDisconnected', { sensor:sensor, addresses:addresses } );
-                    }
-
-                    var idx = globalConnectedSensors.indexOf( sensor );
-                    if( idx != -1 )
-                    {
-                        globalConnectedSensors.splice( idx, 1 );
-
-                        console.log('Remove global connected sensor ' + sensor.address);
-                    }
-                });
-
-                var addresses = [sensor.address];
-                if ( isInSyncingProgress )
-                {
-                    bleHandler.sendSyncingEvent( 'bleSensorConnected', { sensor:sensor, addresses:addresses } );
-                }
-
-                bleHandler.sendBleEvent( 'bleSensorConnected', { sensor:sensor, addresses:addresses } );
-
-                globalConnectedSensors.push( sensor );
-                console.log('Add global connected sensor ' + sensor.address);
-
-                setTimeout( function()
-                {
-                    bleHandler.readHeadingStatus( sensor );
-                }, 100);
-            });
-                });
-            } catch (error) {
-                completed = true;
-                clearTimeout(warningTimer);
-                bleHandler._pendingConnections.delete(sensor.address);
-                console.error('[BLE-V2] connect threw:', error);
-                bleHandler.sendBleEvent('bleSensorError', {sensor: sensor, error: error});
-            }
-        }, scanWasActive ? 500 : 150);
+            } catch (e) { fail(e, sensor.state !== 'disconnected'); }
+        };
+        if (!this._bleScanActive) return connect();
+        console.log('[BLE-P4] SCAN_STOP_REQUESTED', address);
+        timeoutId = setTimeout(() => fail(new Error('Scan-stop acknowledgement timeout'), true), 5000);
+        this.central.once('scanStop', function() {
+            if (settled) return;
+            cleanup();
+            console.log('[BLE-P4] SCAN_STOP_CONFIRMED', address);
+            connect();
+        });
+        try { this.central.stopScanning(); }
+        catch (e) { fail(e, true); }
     }
 
     // -----------------------------------------------------------------------------------
