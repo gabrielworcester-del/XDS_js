@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "description": "Xsens DOT Server",
     "dependencies": {
-        "@abandonware/noble": "^1.9.2-8",
+        "@abandonware/noble": "1.9.2-26",
         "express": "^4.17.1",
         "hashmap": "^2.4.0",
         "ip": "^1.1.5",
