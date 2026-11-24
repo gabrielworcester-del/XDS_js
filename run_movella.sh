@@ -1,46 +1,40 @@
 #!/usr/bin/env bash
-# Run from anywhere: ./run_movella.sh local  or  ./run_movella.sh network
 set -euo pipefail
-HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-MODE="${1:-network}"
-
-# Restart Bluetooth before Noble loads, never between scan and connect.
-restart_bluetooth_before_server() {
-    echo "[BLE] Restarting bluetooth.service before starting Noble..."
-    sudo systemctl restart bluetooth
-    if ! sudo systemctl is-active --quiet bluetooth; then
-        echo "[BLE] Bluetooth service did not become active" >&2
-        return 1
-    fi
-
-    # Wait for controller readiness; avoid a fixed sleep-only assumption.
-    local attempt
-    for attempt in {1..12}; do
-        if timeout 3s bluetoothctl show 2>/dev/null | grep -q 'Powered: yes'; then
-            echo "[BLE] Bluetooth adapter is ready"
-            return 0
-        fi
-        sleep 0.5
-    done
-    echo "[BLE] Bluetooth adapter did not report Powered: yes" >&2
-    return 1
-}
-
-case "$MODE" in
-  local)
-    CFG="$HERE/lsl_local.cfg"
-    [[ -f "$CFG" ]] || { echo "Missing $CFG" >&2; exit 1; }
-    echo "[MODE] Local LSL only (loopback 127.0.0.1; no external network required)"
-    echo "[MODE] Local viewers must use: LSLAPICFG=$CFG"
-    restart_bluetooth_before_server
-    exec sudo env "LSLAPICFG=$CFG" "NOBLE_HCI_DEVICE_ID=${NOBLE_HCI_DEVICE_ID:-0}" node "$HERE/xsensDotServer.js"
-    ;;
-  network)
-    echo "[MODE] Network LSL (existing/default liblsl configuration)"
-    # Prevent an inherited config from silently enabling local mode.
-    restart_bluetooth_before_server
-    exec sudo env -u LSLAPICFG "NOBLE_HCI_DEVICE_ID=${NOBLE_HCI_DEVICE_ID:-0}" node "$HERE/xsensDotServer.js"
-    ;;
-  *)
-    echo "Usage: $0 {local|network}" >&2; exit 2 ;;
+cd -- "$(dirname -- "$(realpath -- "$0")")"
+mode=${1:-network}
+case "$mode" in
+  local) [[ -f lsl_local.cfg ]] || { echo 'Missing lsl_local.cfg'; exit 1; }; export LSLAPICFG="$PWD/lsl_local.cfg";;
+  network) unset LSLAPICFG;;
+  *) echo 'Usage: run_movella.sh local|network'; exit 2;;
 esac
+export NOBLE_HCI_DEVICE_ID="${NOBLE_HCI_DEVICE_ID:-0}"
+[[ $NOBLE_HCI_DEVICE_ID =~ ^[0-9]+$ ]] || { echo 'Invalid HCI adapter index'; exit 2; }
+if [[ $EUID != 0 ]]; then
+  if ! [[ -d node_modules ]] || ! sha256sum -c --status .movella/dependencies.sha256 2>/dev/null; then
+    echo 'Dependencies missing or changed. Running setup first.'
+    bash setup_dependencies.sh
+  fi
+  envargs=("NOBLE_HCI_DEVICE_ID=$NOBLE_HCI_DEVICE_ID")
+  [[ -z ${LIBLSL_PATH:-} ]] || envargs+=("LIBLSL_PATH=$LIBLSL_PATH")
+  exec sudo env -u LSLAPICFG "${envargs[@]}" bash "$PWD/run_movella.sh" "$mode"
+fi
+exec 9>/run/lock/movella-dot.lock
+flock -n 9 || { echo 'Movella server already running'; exit 1; }
+if ss -ltnH 'sport = :8080' | grep -q .; then echo 'Port 8080 already in use'; exit 1; fi
+node -e 'require("koffi").load(process.env.LIBLSL_PATH || "liblsl.so")'
+echo '[Movella] Restarting Bluetooth (other Bluetooth connections may disconnect).'
+systemctl restart bluetooth.service
+systemctl is-active --quiet bluetooth.service
+adapter="hci$NOBLE_HCI_DEVICE_ID"
+ready=false
+for ((i=0;i<20;i++)); do
+  if [[ -r /sys/class/bluetooth/$adapter/address ]]; then
+    address=$(cat "/sys/class/bluetooth/$adapter/address")
+    if bluetoothctl show "$address" | grep -q 'Powered: yes'; then ready=true; break; fi
+    timeout 3 btmgmt --index "$NOBLE_HCI_DEVICE_ID" power on >/dev/null 2>&1 || true
+  fi
+  sleep 1
+done
+[[ $ready == true ]] || { echo "Bluetooth adapter $adapter not ready"; exit 1; }
+echo "[Movella] Starting $mode LSL on $adapter. Press Ctrl+C to stop."
+exec node xsensDotServer.js

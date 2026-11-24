@@ -148,3 +148,7 @@ You can also raise app development questions and feature requests of Xsens DOT i
 
 
 # Try coding a simple for loop 
+
+## Raspberry Pi deployment
+
+See [deployment instructions](docs/DEPLOYMENT.md) for dependency setup and clickable launchers.
