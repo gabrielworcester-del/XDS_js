@@ -22,30 +22,6 @@ exec 9>/run/lock/movella-dot.lock
 flock -n 9 || { echo 'Movella server already running'; exit 1; }
 if ss -ltnH 'sport = :8080' | grep -q .; then echo 'Port 8080 already in use'; exit 1; fi
 node -e 'require("koffi").load(process.env.LIBLSL_PATH || "liblsl.so")'
-# Wait for the actual TCP listener without intercepting Node output.
-server_pid=$$
-(
-  exec 9>&-
-  deadline=$((SECONDS + 30))
-  while ((SECONDS < deadline)); do
-    kill -0 "$server_pid" 2>/dev/null || exit 0
-    if ss -ltnH 'sport = :8080' | grep -q .; then
-      sleep 3
-      kill -0 "$server_pid" 2>/dev/null || exit 0
-      echo '[Movella] Restarting Bluetooth before sensor connections.'
-      if ! systemctl restart bluetooth.service || ! systemctl is-active --quiet bluetooth.service; then
-        echo '[Movella] Bluetooth restart failed. Stop with Ctrl+C.' >&2
-        exit 1
-      fi
-      sleep 3
-      kill -0 "$server_pid" 2>/dev/null || exit 0
-      echo '[Movella] Bluetooth restart complete. Confirm blePoweredOn: true before scanning.'
-      exit 0
-    fi
-    sleep 0.2
-  done
-  echo '[Movella] Web server readiness timeout. Stop with Ctrl+C and inspect output.' >&2
-  exit 1
-) &
-echo '[Movella] Starting server. Wait for Bluetooth restart complete before connecting.'
+echo '[Movella] Starting server.'
+echo '[Movella] Wait for blePoweredOn: true before connecting.'
 exec node xsensDotServer.js
