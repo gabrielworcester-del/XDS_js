@@ -1,154 +1,139 @@
-## NOTE
-The new Xsens DOT PC SDK to develop PC-based applications is now ready! It is possible to download it from our Xsens DOT developer page (https://www.xsens.com/developer). The Xsens DOT Server, an example code for the BLE service specification, **is then archived**.
+# Movella DOT to Lab Streaming Layer (XDS_js)
 
-## Overview
-Xsens DOT Server is a simple web server that can scan, connect and start measurement with Xsens DOT on Windows, macOS and Raspberry Pi. The system is built using Node.js in combination with [Noble](https://github.com/abandonware/noble). 
+A research-oriented modification of the original [Xsens DOT Server](https://github.com/xsens/xsens_dot_server) for real-time inertial data acquisition on Raspberry Pi and direct publication to [Lab Streaming Layer (LSL)](https://labstreaminglayer.org/).
 
-**Functions**
-* Scan sensor
-* Connect sensor
-* Synchronization
-* Real-time streaming - While you can get all measurement modes (exclude high fidelity modes), 6 modes are currently supported in Xsens DOT Server:
-  * Complete (Euler)
-  * Extended (Quaternion)
-  * Rate quantities (with mag)
-  * Custom mode 1
-  * Custom mode 2
-  * Custom mode 3
-* Data logging
-* Heading reset
+**Current branch: `main`.** Deployment baseline: Patch 5.2.3. Use this branch when cloning or forking. This fork is independent of the archived upstream server and is not an official Movella product.
 
-Get more information about Xsens DOT in [Develepor Page](https://www.xsens.com/developer) and [Base](https://base.xsens.com/hc/en-us/categories/360002285079-Wearable-Sensor-Platform).
+## Features
 
-## Important Notices
-* Disconnect all Bluetooth peripherals (mouse, keyboard) before start Xsens DOT Server to ensure stable Bluetooth connections. 
-* Firmware support:
-  * v1.6.0
+- Browser-based Bluetooth Low Energy (BLE) discovery, connection, measurement control, synchronization and CSV logging inherited from the original server.
+- Direct LSL publication of Complete Euler measurements via the native liblsl C API, without an intermediate UDP relay or CSV polling.
+- One LSL outlet per synchronized DOT, with a software limit of five outlets; one unsynchronized DOT is also supported.
+- Local-only or network LSL modes, dependency setup and optional Raspberry Pi desktop launchers.
+- A single Bluetooth service restart immediately after the web listener starts, before sensor connections.
 
-## Documentation
-* [System Architecture](https://github.com/xsens/xsens_dot_server/blob/master/documentation/Xsens%20DOT%20Server%20-%20System%20Architecture.pdf): system architecture of Xsens DOT Server.
-* [Sensor Server](https://github.com/xsens/xsens_dot_server/blob/master/documentation/Xsens%20DOT%20Server%20-%20Sensor%20Server.pdf): application and workflow control.
-* [BLE Handler](https://github.com/xsens/xsens_dot_server/blob/master/documentation/Xsens%20DOT%20Server%20-%20BLE%20Handler.pdf): creates an abstraction from the BLE protocol.
-* [Web GUI Handler](https://github.com/xsens/xsens_dot_server/blob/master/documentation/Xsens%20DOT%20Server%20-%20Web%20GUI%20Handler.pdf): the web server
-* [Noble](https://github.com/noble/noble): Node package that implements an interface with the BLE radio (i.e. driver).
-* [Web Client](https://github.com/xsens/xsens_dot_server/blob/master/documentation/Xsens%20DOT%20Server%20-%20Web%20Client.pdf): a web browser that can run on any computer on the local network and that renders an HTML page that implements the GUI.
+## System architecture
 
-## Set up the environment
-* [Windows](#set-up-on-windows)
-* [macOS](#set-up-on-macos)
-* [Rasberry Pi](#set-up-on-raspberry-pi)
+```text
+Movella / Xsens DOT sensors
+          | BLE
+          v
+ Raspberry Pi: bleHandler.js
+          |                  |
+          v                  v
+ sensorServer.js        lslPublisher.js
+          |                  | Koffi / liblsl
+          v                  v
+ Web GUI / CSV          LSL consumers
+ (TCP port 8080)        (local or network)
+```
 
-### Set up on Windows
-#### Prerequisites
-* Windows 10, Windows 7
-* Bluetooth 4.2 USB adapter or above (backward compatible with BT4.0 with performance loss)
-* Recommend to use Chrome or Firefox 
+## Requirements
 
-#### Install the following tools
-* Install Python 3.8.3 from the [Micfrosoft Store package](https://docs.python.org/3/using/windows.html#the-microsoft-store-package) 
-* Install [Node.js-v12.16.2-x64](https://nodejs.org/download/release/v12.16.2/node-v12.16.2-x64.msi)
-  * Keep clicking **Next** to complete the installation.
-  * Enter `npm -v` in command prompt to check if the installation is successful.<br>
-&nbsp;<img height="60" src="images/image002.gif"/>
+- Raspberry Pi OS Bookworm (64-bit ARM), a working Bluetooth adapter and charged DOT sensors.
+- Node.js 18.x, npm, BlueZ and the native liblsl library. Node 18 is the historical compatibility baseline, not a currently maintained security baseline.
+- A browser on the Pi or another computer on the same trusted network. Remote browser clients do not need Node.js or a Bluetooth adapter for this workflow.
+- Optional: LabRecorder for XDF recording or an LSL-compatible viewer; Python with pylsl for diagnostics.
 
-* Install [node-gyp](https://github.com/nodejs/node-gyp#installation)
-   ```sh
-   npm install -g node-gyp
-   ```
-* Install all the required tools and configurations using Microsoft's [windows-build-tools](https://github.com/felixrieseberg/windows-build-tools) from an elevated PowerShell or CMD.exe (run as Administrator)
-   ```sh
-   npm install --global --production windows-build-tools
-   ```
-* Install [Zadig](https://zadig.akeo.ie/) to setup WinUSB driver:
-  * Find Bluetooth adapter inforamtion in Device Manager <br>
-&nbsp;<img height="250" src="images/image006.gif"/>
-  * Open Zadig, goto **Options**, enable "**List All Devices**"
-  * Find your Bluetooth adapter, change the driver to **WinUSB**. Then click **Replace Driver** <br>
-&nbsp;<img height="200" src="images/image007.gif"/>
+The supported deployment workflow targets Raspberry Pi Linux. Native Windows/macOS server installation is not validated for this fork.
 
-  * Note: please retry several times if the intallation fails. Or restart the computer and try again. 
+## Installation
 
+On the Pi, as your normal desktop user:
 
-### Set up on macOS
-#### Install following tools
-* Install [Xcode](https://apps.apple.com/ca/app/xcode/id497799835?mt=12) 
-* Install [node.js 8.9.4](https://nodejs.org/download/release/v8.9.4/)
-  * You can install [*n*](https://www.npmjs.com/package/n) package to easily manage Node.js versions.
+```bash
+sudo apt-get update
+sudo apt-get install -y git python3
+cd ~
+git clone https://github.com/gabrielworcester-del/XDS_js.git
+cd XDS_js
+bash setup_dependencies.sh
+```
 
-**Note**: For some operating systems (e.g. macOS), the address is not available unless a connection has been established first. If this is the case, the address of the peripheral is set to a counter. This address will be used until the server is restarted and the sensor is discovered again.
+The setup script installs missing OS dependencies and uses `npm ci` with the committed lockfile. If native liblsl is missing, install a trusted compatible package or supply an independently verified SHA-256 checksum and, if needed, a package URL as described in [deployment instructions](docs/DEPLOYMENT.md). Do not use sudo to run npm or the setup script itself.
 
-### Set up on Raspberry Pi
-#### Prerequisites
-* Raspberry Pi 4 Model B 4GB RAM / Raspberry Pi 3 Model B+, 1 GB RAM
-* Install [Raspberry Pi OS](https://www.raspberrypi.org/downloads/raspberry-pi-os/)
+For optional desktop shortcuts:
 
-#### Installation steps
-* Install dependcies 
-  ```sh
-  sudo apt-get install bluetooth bluez libbluetooth-dev libudev-dev
-  sudo apt-get install build-essential checkinstall libssl-dev
-  ```
+```bash
+bash install_launcher.sh
+```
 
-* Download Node.js 8.x: 
-  ```sh
-  curl -sL https://deb.nodesource.com/setup_8.x | sudo -E bash -
-  ```
- * Install `npm`:
-   ```sh
-   sudo apt-get install npm
-   ```
- * Install Node.js 8.x: 
-   ```sh
-   sudo npm install -g n
-   sudo n 8.11.1
-   node -v
-   ```
+This creates **Launch Movella DOT** and **Install / Repair Movella DOT** entries. Mark the desktop files trusted if your file manager requires it.
 
-## Run Xsens DOT Server
-1. Clone repository
-   ```sh
-   git clone https://github.com/xsens/xsens_dot_server.git
-   ```
-1. Enter Xsens DOT Server project `cd ./xsens_dot_server` and install the dependency package `npm install`
-1. Run Xsens DOT Server
-   * Windows and macOS: `node xsensDotServer`
-   * Raspberry Pi: `sudo node xsensDotServer`
-1. Open Xsens DOT server in browser
-   * Run http://localhost:8080/ or http://127.0.0.1:8080/ you are able to use Xsens DOT Server!
+## Quick start
 
-## Known issues
-1. [Connection] Unable to connect sensors in Mac with Bluetooth 5.0.
-1. [Connection] Connection with firmware 1.3.0 sensors may fail in Windows. You can:
-   * use firmware 1.0.0
-   * or use a Bluetooth dongle which support 4.0 or above. Refer to [Add Bluetooth adapter](#add-bluetooth-adapter) to configure your Bluetooth dongle.
+Start network mode (or use the desktop launcher):
+
+```bash
+bash run_movella.sh network
+```
+
+1. Wait for `Bluetooth restart complete` and confirm `blePoweredOn: true` before scanning.
+2. Open `http://localhost:8080/` on the Pi or `http://<PI_IP>:8080/` on a remote computer. Use `hostname -I` on the Pi to identify its network address.
+3. Scan for DOTs, connect the required sensors, and select **Complete (Euler)** measurement mode. For multiple DOTs, complete the hardware synchronization workflow before expecting synchronized LSL outlets.
+4. Start measurement and confirm the expected `Xsens_DOT_...` streams in your LSL consumer. Start LabRecorder recording if desired.
+5. Stop measurement and recording, disconnect sensors, and stop the server with Ctrl+C.
+
+For loopback-only LSL publication:
+
+```bash
+bash run_movella.sh local
+```
+
+Local-mode consumers must use the same `lsl_local.cfg` via `LSLAPICFG`. From a second Pi terminal with pylsl installed:
+
+```bash
+cd ~/XDS_js
+export LSLAPICFG="$PWD/lsl_local.cfg"
+python3 check_local_lsl.py
+```
+
+Local mode restricts LSL discovery, not access to the web GUI. Use only trusted networks; do not expose the server directly to the public internet.
+
+## LSL data format
+
+Stream name: `Xsens_DOT_<sanitized_sensor_address>`. Type: `IMU`. Payload: Complete Euler (ID 16). Seven double-precision channels, with nominal rate 0 (irregular):
+
+| Index (1-based) | Channel | Unit |
+| --- | --- | --- |
+| 1 | sensor_time_us | microseconds (see timing caveat below) |
+| 2 | euler_x | degrees |
+| 3 | euler_y | degrees |
+| 4 | euler_z | degrees |
+| 5 | freeAcc_x | m/s² |
+| 6 | freeAcc_y | m/s² |
+| 7 | freeAcc_z | m/s² |
+
+### Synchronization and timing
+
+For a successfully synchronized group, the publisher maps root-synchronized 32-bit sensor timestamps to a shared LSL timebase, handling timestamp rollover. The anchor is established at first packet arrival and therefore includes initial BLE transport delay. For a single unsynchronized DOT, the first channel is a host-derived timestamp and the LSL sample timestamp uses BLE arrival time; do not interpret this as a synchronized hardware clock or assume the channel label establishes its units independently of the acquisition pathway.
+
+LSL timestamps are not UTC timestamps. The implementation does not establish absolute sensor-to-host latency or guarantee a particular synchronization accuracy, packet-loss rate or maximum sustainable throughput. Validate timing and stream completeness for your experiment.
 
 ## Troubleshooting
-#### Add Bluetooth adapter
-If you encounter `Error: No compatible USB Bluetooth 4.0 device found!` when try to run Xsens DOT Sever on Windows, it means you need to add your Bluetooth adapter to the USB device list:
- 1. Open Device Manager, find the VID and PID of your Bluetooth adapter.<br>
-&nbsp;<img height="300" src="images/image011.gif"/>
- 2. Open source code: *xsens_dot_server\node_modules\bluetooth-hci-socket\lib\usb.js*
- 3. Add Bluetooth VID & PID in usb.js (line 66), save and close.<br>
-&nbsp;<img height="80" src="images/image012.gif"/>
- 4. Run Xsens DOT Server again.
- 
- #### Reinstall Bluetooth adapter
- After replacing the Bluetooth adapter with WinUSB driver, you cannot connect to Bluetooth devices with your PC. Here is the way to reinstall the Bluetooth adapter:
-  1. Go to **Device Manager** -> **Universal Serial Bus devices**
-  2. Find your converted WinUSB driver and uninstall
-  3. In **Device Manager**, go to **Action** (top menu), then **Scan for hardware changes** and let it reinstall
-  4. You should able to find your Bluetooth adapter back in **Bluetooth**.
 
-## Bug reports and feedback
-All feedback is welcome and helps us to improve!
+- **Cannot connect:** Wait for the startup Bluetooth restart to finish; charge sensors, and power-cycle them after failed or abruptly terminated sessions if necessary. The restart can disconnect other Bluetooth peripherals.
+- **No LSL streams:** Start measurement in Complete Euler mode, check successful synchronization for multiple DOTs, and ensure local/network configuration matches the consumer.
+- **Native library missing:** Follow [deployment instructions](docs/DEPLOYMENT.md) for liblsl installation or `LIBLSL_PATH` configuration.
+- **Port 8080 in use:** Stop the previous server cleanly before launching a new instance.
+- **Network discovery fails:** Check that hosts are on a compatible trusted network, that LSL discovery traffic is permitted, and that local-only mode is not selected.
 
-Please report all bugs by [rasing an issue](https://github.com/xsens/xsens_dot_server/issues/new).
+## Repository guide
 
-You can also raise app development questions and feature requests of Xsens DOT in our [Community Forum](https://base.xsens.com/hc/en-us/community/topics).
+| File or directory | Purpose |
+| --- | --- |
+| `xsensDotServer.js` | Server entry point |
+| `bleHandler.js`, `sensorServer.js`, `syncManager.js` | BLE acquisition, state machine, synchronization and CSV |
+| `lslPublisher.js` | Direct LSL publishing and timestamp mapping |
+| `webGuiHandler.js`, `communication.js`, `index.html`, `styleSheet.css` | Web server and browser interface |
+| `run_movella.sh`, `setup_dependencies.sh`, `install_launcher.sh` | Deployment and startup |
+| `lsl_local.cfg`, `check_local_lsl.py` | Local LSL configuration and diagnostics |
+| `docs/DEPLOYMENT.md` | Detailed deployment and acceptance checks |
+| `documentation/` | Historical upstream architecture PDFs; not current deployment instructions |
+| `AGENTS.md` | Development guidance |
 
+## Attribution and feedback
 
-# Try coding a simple for loop 
+Based on the original [Xsens DOT Server](https://github.com/xsens/xsens_dot_server). Original source notices and upstream technical references are retained. See upstream terms and applicable third-party licenses before redistribution; this fork does not add a new license grant.
 
-## Raspberry Pi deployment
-
-See [deployment instructions](docs/DEPLOYMENT.md) for dependency setup and clickable launchers.
+Report fork-specific problems through [this repository's issues](https://github.com/gabrielworcester-del/XDS_js/issues). Include the OS, Node version, DOT firmware, number of sensors, launch mode and relevant logs (remove identifying sensor addresses if appropriate).

@@ -1,4 +1,4 @@
-# Codex Project Instructions — XDS_js (Movella DOT → LSL)
+# Codex Project Instructions â€” XDS_js (Movella DOT â†’ LSL)
 
 > Repository: `gabrielworcester-del/XDS_js`  
 > Context snapshot: 2026-11-16. **The checked-out code is the source of truth.** Reinspect files, `git status`, and recent changes before relying on this document; it is not a substitute for the current implementation.
@@ -17,9 +17,9 @@ The larger research goals are reliable multi-DOT acquisition, traceable timestam
 - Server/UI: Node.js, Express, Socket.IO, browser GUI on **port 8080**.
 - LSL: Node.js `koffi` FFI calling the native **`liblsl.so`** C API. `koffi` and native liblsl must be installed/available on the runtime; check actual installation rather than assuming `package.json` provisions them. `LIBLSL_PATH` can override the library path.
 - Python is useful for diagnostics with `pylsl`, but Python does **not** implement the main sensor server.
-- The repository's inherited `README.md` contains historical Xsens/Node setup directions; do not assume its legacy Node version or paths match this installation.
+- The current `README.md` and `docs/DEPLOYMENT.md` describe the Raspberry Pi workflow; historical upstream PDFs are retained for reference.
 
-## Current architecture — verify against source before edits
+## Current architecture â€” verify against source before edits
 
 ```text
 Movella DOT BLE notifications
@@ -50,7 +50,7 @@ webGuiHandler.js + communication.js     v
 | `syncManager.js` | DOT sensor synchronization workflow, root sensor selection, success/failure handling, and synchronization state passed to LSL. |
 | `lslPublisher.js` | Direct liblsl publisher, sensor-specific outlets, stream metadata, and acquisition-time-to-LSL-time conversion. |
 | `lsl_local.cfg` | Explicit loopback-only LSL discovery/network configuration for Pi-local viewing. |
-| `run_movella.sh` | Pi startup helper with `local` and `network` modes; restarts Bluetooth **before** launching Noble. |
+| `run_movella.sh` | Pi startup helper with `local` and `network` modes; restarts Bluetooth once immediately after the web listener starts (before scanning or connecting). |
 | `check_local_lsl.py` | `pylsl` diagnostic that discovers `Xsens_DOT_` streams and reads one sample. |
 | `webGuiHandler.js` | Express/Socket.IO web-server interface. |
 | `communication.js` | Browser-side GUI communication and sensor/event interactions. |
@@ -70,9 +70,9 @@ webGuiHandler.js + communication.js     v
   2. `euler_x` (degrees)
   3. `euler_y` (degrees)
   4. `euler_z` (degrees)
-  5. `freeAcc_x` (m/s²)
-  6. `freeAcc_y` (m/s²)
-  7. `freeAcc_z` (m/s²)
+  5. `freeAcc_x` (m/sÂ²)
+  6. `freeAcc_y` (m/sÂ²)
+  7. `freeAcc_z` (m/sÂ²)
 - The stream nominal sampling rate is **0 (irregular)**. Do not change it to a guessed fixed rate. Consumers should handle timestamps rather than assuming perfectly periodic delivery.
 - In synchronized operation, LSL publishing begins only after the expected DOT group successfully synchronizes; the publisher uses a shared root-synchronized sensor-time anchor and handles 32-bit microsecond timestamp rollover. A failed/incomplete group must not be advertised as synchronized.
 - In unsynchronized operation, the source currently supports **one** DOT with an LSL timestamp taken at BLE packet arrival. It **must not** be described as multi-sensor synchronized data.
@@ -108,13 +108,13 @@ cd ~/XDS_js
 export LSLAPICFG="$PWD/lsl_local.cfg"
 python3 check_local_lsl.py
 
-# Manual BLE reset when the server is NOT actively using the adapter
+# Manual BLE reset only when no scan, connection attempt or recording is active
 sudo systemctl restart bluetooth
 ```
 
 For the local mode, viewers must also load the same `lsl_local.cfg` through `LSLAPICFG`. In either mode, connect and enable a DOT through the GUI before expecting live samples. Access the browser UI via `http://<PI_IP>:8080/` or `http://localhost:8080/` on the Pi. Do not assume any historical lab IP address remains valid.
 
-**Do not restart Bluetooth in the middle of a live Noble scan/connect/recording attempt.** The startup script performs the reset before Noble is loaded.
+**Do not restart Bluetooth in the middle of a live Noble scan/connect/recording attempt.** The startup script performs the reset once after the port 8080 listener appears; wait for restart completion before scanning.
 
 ## Coding and debugging instructions for Codex
 
@@ -143,7 +143,7 @@ bash -n run_movella.sh
 python3 -m py_compile check_local_lsl.py
 ```
 
-Then inspect the patch with `git diff --check` and `git diff`. Do **not** call syntax checks hardware validation. A full real-world check, when the user can run it on a Pi with DOTs, is: scan → connect → enable Complete Euler → synchronize (if multiple sensors) → inspect `Xsens_DOT_` outlet(s) → receive plausible channel data → stop/disconnect cleanly → confirm GUI/CSV still works. Exercise both `local` and `network` configurations as relevant.
+Then inspect the patch with `git diff --check` and `git diff`. Do **not** call syntax checks hardware validation. A full real-world check, when the user can run it on a Pi with DOTs, is: scan â†’ connect â†’ enable Complete Euler â†’ synchronize (if multiple sensors) â†’ inspect `Xsens_DOT_` outlet(s) â†’ receive plausible channel data â†’ stop/disconnect cleanly â†’ confirm GUI/CSV still works. Exercise both `local` and `network` configurations as relevant.
 
 ## Priority for future improvements
 

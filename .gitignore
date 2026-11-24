@@ -103,15 +103,14 @@ dist
 # TernJS port file
 .tern-port
 
-# Movella generated and one-time local files
+# Movella generated files and historical local patches
 .movella/
-*.bak
+*.bak*
 *.backup
+*.pre_patch*
 __pycache__/
 *.pyc
-/apply_patch4.py
-/apply_patch_5_1.py
-
-# Movella generated and one-time local files
-/apply_patch_5_2.py
-*.pre_patch*
+/apply_patch*.py
+/patch_movella_*.py
+/movella_lsl_fix.py
+/cleanup_movella_docs.py

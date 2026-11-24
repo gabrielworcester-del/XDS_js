@@ -1,13 +1,45 @@
-# Raspberry Pi deployment (Patch 5.2)
+# Raspberry Pi deployment — Patch 5.2.3
 
-On Raspberry Pi OS Bookworm ARM64, run `bash install_launcher.sh` once from the repository as the desktop user. Double-click **Launch Movella DOT** for normal operation, or **Install / Repair Movella DOT** for explicit dependency repair. First launch automatically runs setup if the lockfile stamp or node_modules is absent. Administrative operations prompt in the terminal; no password is saved. Open the existing web GUI at http://localhost:8080 (or the Pi IP on a remote computer). Stop using Ctrl+C, then verify the port is free before another run. Wait for the terminal message “Bluetooth restart complete” before scanning or connecting. Bluetooth restarts once after the web server and Noble report readiness, disrupting other Bluetooth connections. If readiness or restart fails, stop with Ctrl+C and troubleshoot. Charge all DOTs and power-cycle them between sessions when recovering from a failed or abruptly terminated connection.
+See the [README](../README.md) for installation and acquisition workflow.
 
-CLI equivalents: `bash run_movella.sh network`, `bash run_movella.sh local`, `NOBLE_HCI_DEVICE_ID=1 bash run_movella.sh network`. Desktop launch defaults to network mode and adapter 0 unless the desktop environment specifies another adapter. `LIBLSL_PATH` is preserved. Existing native liblsl is reused. If missing, install a trusted matching package manually or run `LIBLSL_SHA256=<independently verified SHA256> bash setup_dependencies.sh` with an optional `LIBLSL_URL` override. The historical default asset URL is not independently verified. No unchecked native download is installed. Node 18 is the historical project baseline, not a supported long-term security baseline; migrate separately.
+## Dependencies
 
-Do not run npm as root. The server uses the existing sudo-based acquisition arrangement; do not run untrusted repository code. No passwordless sudo or new service is installed.
+The baseline is Raspberry Pi OS Bookworm ARM64 with Node 18.x. Run `bash setup_dependencies.sh` as the desktop user. The script installs missing apt packages, verifies the Node major version, uses `npm ci`, and checks that native liblsl loads through Koffi. Node 18 is a historical compatibility baseline and is end-of-life; runtime migration is a separate task.
 
-After stopping the old GUI and server, remove the obsolete generated shim `.movella/bin/sudo` if present; keep logs until no longer needed. Reinstall desktop entries to replace the previous GUI shortcut. Git tracks source history; do not keep patch archives or backup copies inside the repository.
+Existing liblsl is reused. If missing, install a trusted package compatible with your OS and architecture, or supply an independently verified package hash:
 
-Hardware acceptance: verify dependency setup, repeated launch, duplicate launch rejection, configured adapter readiness, Ctrl+C and port release, local/network LSL discovery, and multi-DOT synchronization. No physical testing was performed for this patch.
+```bash
+LIBLSL_SHA256="REPLACE_WITH_VERIFIED_SHA256" bash setup_dependencies.sh
+```
 
-Hardware baseline: Node 18.20.4, npm 9.2.0, Noble 1.9.2-26, Bluetooth HCI socket 0.5.3-12, Koffi 3.3.8. Manual post-launch Bluetooth restart passed 3/3 three-DOT trials; no restart passed 0/3. Automated launcher still requires hardware validation. Stale peripheral connection state is a working hypothesis, not a proven cause.
+Replace the placeholder with the actual 64-character hexadecimal digest before running. Optionally set `LIBLSL_URL` to the matching HTTPS package URL. The historical default asset URL has not been independently verified. No unchecked native download is installed. `LIBLSL_PATH` can specify an alternate installed library.
+
+## Startup
+
+```bash
+bash install_launcher.sh
+bash run_movella.sh network
+# Alternatively, for Pi-local LSL:
+# bash run_movella.sh local
+# For a different HCI adapter:
+# NOBLE_HCI_DEVICE_ID=1 bash run_movella.sh network
+```
+
+Desktop launch defaults to network mode. First launch runs setup if the lockfile stamp or node_modules is missing. The repair shortcut forces dependency repair. Administrative operations prompt in the terminal; no password is saved. The launcher uses the existing sudo-based acquisition arrangement; no passwordless sudo or service is installed.
+
+Patch 5.2.3 checks for a free port and takes a lock before starting the server. A background helper checks for port 8080 at 100 ms intervals for up to 30 seconds and restarts Bluetooth once when the listener appears. It does not wait for Noble readiness before restarting and has no deliberate post-listener delay. Wait for the restart completion message and confirm `blePoweredOn: true` before scanning. A restart may disconnect other Bluetooth peripherals. If restart fails or the listener times out, stop the server with Ctrl+C and investigate; a background-helper failure does not automatically stop Node.
+
+Use the normal launcher, not direct Node startup, to obtain this behavior. Stop with Ctrl+C and verify port release before restarting. Do not reset Bluetooth during active scanning, connections or acquisition. Charge DOTs and power-cycle them when recovering from failed sessions. The stale peripheral state explanation remains a hypothesis.
+
+If migrating from older desktop launchers, remove the obsolete generated `.movella/bin/sudo` shim if present after stopping the server and reinstall the shortcuts.
+
+## Acceptance checks
+
+- Fresh clone dependency setup and repeated launch.
+- Duplicate launch rejection and clean Ctrl+C shutdown; port release.
+- Bluetooth restart completion and repeated multi-DOT connections.
+- Successful synchronization, one Complete Euler LSL stream per expected DOT, plausible data, and functioning GUI/CSV logging.
+- Local-mode discovery with the same LSLAPICFG on consumers; network-mode discovery from a second host.
+- Experimental timing characterization, packet completeness and latency before relying on data for research.
+
+Historical manual post-launch restart tests passed 3/3 three-DOT trials, versus 0/3 without restart. This is not a general reliability guarantee. No additional hardware or clean-install testing was performed as part of this documentation revision.
