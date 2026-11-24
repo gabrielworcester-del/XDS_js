@@ -22,19 +22,32 @@ exec 9>/run/lock/movella-dot.lock
 flock -n 9 || { echo 'Movella server already running'; exit 1; }
 if ss -ltnH 'sport = :8080' | grep -q .; then echo 'Port 8080 already in use'; exit 1; fi
 node -e 'require("koffi").load(process.env.LIBLSL_PATH || "liblsl.so")'
-echo '[Movella] Restarting Bluetooth (other Bluetooth connections may disconnect).'
-systemctl restart bluetooth.service
-systemctl is-active --quiet bluetooth.service
-adapter="hci$NOBLE_HCI_DEVICE_ID"
-ready=false
-for ((i=0;i<20;i++)); do
-  if [[ -r /sys/class/bluetooth/$adapter/address ]]; then
-    address=$(cat "/sys/class/bluetooth/$adapter/address")
-    if bluetoothctl show "$address" | grep -q 'Powered: yes'; then ready=true; break; fi
-    timeout 3 btmgmt --index "$NOBLE_HCI_DEVICE_ID" power on >/dev/null 2>&1 || true
-  fi
-  sleep 1
-done
-[[ $ready == true ]] || { echo "Bluetooth adapter $adapter not ready"; exit 1; }
-echo "[Movella] Starting $mode LSL on $adapter. Press Ctrl+C to stop."
-exec node xsensDotServer.js
+# Observe the real server's startup output without changing acquisition code.
+# The foreground Node process keeps its normal terminal signal handling.
+startup_log=$(mktemp /tmp/movella-startup.XXXXXXXX)
+server_pid=$$
+(
+  exec 9>&-
+  trap 'rm -f -- "$startup_log"' EXIT
+  deadline=$((SECONDS + 30))
+  while ((SECONDS < deadline)); do
+    kill -0 "$server_pid" 2>/dev/null || exit 0
+    if grep -q 'Webserver listening on port 8080' "$startup_log" &&
+       grep -q 'blePoweredOn: true' "$startup_log"; then
+      echo '[Movella] Server ready; restarting Bluetooth before sensor connections.'
+      if ! systemctl restart bluetooth.service || ! systemctl is-active --quiet bluetooth.service; then
+        echo '[Movella] Bluetooth restart failed. Stop the server with Ctrl+C and investigate.' >&2
+        exit 1
+      fi
+      sleep 3
+      kill -0 "$server_pid" 2>/dev/null || exit 0
+      echo '[Movella] Bluetooth restart complete. You may now scan and connect fully charged DOTs.'
+      exit 0
+    fi
+    sleep 0.2
+  done
+  echo '[Movella] Startup readiness timeout. Do not connect; stop with Ctrl+C and inspect the logs.' >&2
+  exit 1
+) &
+echo '[Movella] Starting server. Wait for Bluetooth restart complete before connecting.'
+exec node xsensDotServer.js > >(exec 9>&-; exec 8>>"$startup_log"; awk -v markerfile=/dev/fd/8 '{ print; fflush(); if (!web && /Webserver listening on port 8080/) { print "Webserver listening on port 8080" >> markerfile; close(markerfile); web=1 } if (!ble && /blePoweredOn: true/) { print "blePoweredOn: true" >> markerfile; close(markerfile); ble=1 } }' ) 2>&1
